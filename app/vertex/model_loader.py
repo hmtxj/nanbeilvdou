@@ -101,6 +101,11 @@ async def fetch_and_parse_models_config() -> Optional[Dict[str, List[str]]]:
                     for model_name in data["vertex_express_models"]
                 ]
 
+                # Manually add the new gemini-3-pro-preview model
+                if "gemini-3-pro-preview" not in data["vertex_models"]:
+                    data["vertex_models"].append("gemini-3-pro-preview")
+                    vertex_log("info", "Manually added gemini-3-pro-preview to the model list.")
+
                 return {
                     "vertex_models": data["vertex_models"],
                     "vertex_express_models": prefixed_express_models,

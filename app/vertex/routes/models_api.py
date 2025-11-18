@@ -258,6 +258,8 @@ async def list_models(fastapi_request: Request, api_key: str = Depends(get_api_k
         # Conditionally add common variations (standard suffixes)
         if not base_model_without_prefix.startswith(
             "gemini-2.0"
+        ) and not base_model_without_prefix.startswith(
+            "gemini-3-pro-preview"
         ):  # Suffix rules based on original_model_id
             standard_suffixes = ["-search", "-encrypt", "-encrypt-full", "-auto"]
             for suffix in standard_suffixes:

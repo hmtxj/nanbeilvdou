@@ -26,8 +26,18 @@ from app.models.schemas import (
     ChatRequestGemini,
     EmbeddingRequest,
     EmbeddingResponse,
+    ImageGenerationRequest,
+    ImageGenerationResponse,
+    VideoGenerationRequest,
+    VideoGenerationOperation,
+    VideoOperationStatus,
+    VideoGenerationResponse,
 )
 from app.services.embedding import EmbeddingClient
+from app.services.imagen import ImagenClient
+from app.services.veo import VeoClient
+from .image_handlers import process_image_generation
+from .video_handlers import process_video_generation, process_video_status, process_video_result
 import app.config.settings as settings
 import asyncio
 from app.vertex.routes import chat_api, models_api
@@ -126,6 +136,7 @@ async def get_cache(cache_key, is_stream: bool, is_gemini=False):
 async def aistudio_list_models(
     _=Depends(custom_verify_password), _2=Depends(verify_user_agent)
 ):
+    # 获取文本模型
     if settings.WHITELIST_MODELS:
         filtered_models = [
             model
@@ -138,17 +149,53 @@ async def aistudio_list_models(
             for model in GeminiClient.AVAILABLE_MODELS
             if model not in settings.BLOCKED_MODELS
         ]
-    return ModelList(
-        data=[
-            {
-                "id": model,
-                "object": "model",
-                "created": 1678888888,
-                "owned_by": "organization-owner",
-            }
-            for model in filtered_models
-        ]
-    )
+    
+    # 添加 Imagen 图像生成模型
+    imagen_models = [
+        model for model in ImagenClient.AVAILABLE_MODELS
+        if model not in settings.BLOCKED_MODELS
+    ]
+    
+    # 添加 Veo 视频生成模型
+    veo_models = [
+        model for model in VeoClient.AVAILABLE_MODELS
+        if model not in settings.BLOCKED_MODELS
+    ]
+    
+    # 合并所有模型
+    all_models = []
+    
+    # 文本模型
+    for model in filtered_models:
+        all_models.append({
+            "id": model,
+            "object": "model",
+            "created": 1678888888,
+            "owned_by": "google",
+            "type": "text",
+        })
+    
+    # 图像模型
+    for model in imagen_models:
+        all_models.append({
+            "id": model,
+            "object": "model",
+            "created": 1678888888,
+            "owned_by": "google",
+            "type": "image",
+        })
+    
+    # 视频模型
+    for model in veo_models:
+        all_models.append({
+            "id": model,
+            "object": "model",
+            "created": 1678888888,
+            "owned_by": "google",
+            "type": "video",
+        })
+    
+    return ModelList(data=all_models)
 
 
 @router.get("/vertex/models", response_model=ModelList)
@@ -534,3 +581,124 @@ async def vector_insert(
     except Exception as e:
         log("ERROR", f"An unexpected error occurred during vector insert: {e}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+
+
+# ============== 图像生成端点 ==============
+
+@router.post("/v1/images/generations", response_model=ImageGenerationResponse)
+@router.post("/images/generations", response_model=ImageGenerationResponse)
+async def create_image(
+    request: ImageGenerationRequest,
+    http_request: Request,
+    _dp=Depends(custom_verify_password),
+    _du=Depends(verify_user_agent),
+):
+    """
+    图像生成端点 (OpenAI 兼容)
+    
+    支持文生图和图生图功能
+    """
+    await protect_from_abuse(
+        http_request,
+        settings.MAX_REQUESTS_PER_MINUTE,
+        settings.MAX_REQUESTS_PER_DAY_PER_IP,
+    )
+    
+    # 验证模型
+    if not ImagenClient.is_imagen_model(request.model):
+        # 如果不是 Imagen 模型，使用默认模型
+        request.model = "imagen-3.0-generate-002"
+    
+    assert key_manager is not None
+    
+    try:
+        response = await process_image_generation(request, key_manager)
+        return response
+    except Exception as e:
+        log("ERROR", f"图像生成失败: {e}")
+        sanitized_detail = sanitize_string(f"图像生成失败: {e}")
+        raise HTTPException(status_code=500, detail=sanitized_detail)
+
+
+# ============== 视频生成端点 ==============
+
+@router.post("/v1/videos/generations", response_model=VideoGenerationOperation)
+@router.post("/videos/generations", response_model=VideoGenerationOperation)
+async def create_video(
+    request: VideoGenerationRequest,
+    http_request: Request,
+    _dp=Depends(custom_verify_password),
+    _du=Depends(verify_user_agent),
+):
+    """
+    视频生成端点
+    
+    发起视频生成任务，返回操作 ID 用于后续状态查询
+    """
+    await protect_from_abuse(
+        http_request,
+        settings.MAX_REQUESTS_PER_MINUTE,
+        settings.MAX_REQUESTS_PER_DAY_PER_IP,
+    )
+    
+    # 验证模型
+    if not VeoClient.is_veo_model(request.model):
+        request.model = "veo-2.0-generate-001"
+    
+    assert key_manager is not None
+    
+    try:
+        response = await process_video_generation(request, key_manager)
+        return response
+    except Exception as e:
+        log("ERROR", f"视频生成失败: {e}")
+        sanitized_detail = sanitize_string(f"视频生成失败: {e}")
+        raise HTTPException(status_code=500, detail=sanitized_detail)
+
+
+@router.get("/v1/videos/generations/{operation_id}", response_model=VideoOperationStatus)
+@router.get("/videos/generations/{operation_id}", response_model=VideoOperationStatus)
+async def get_video_generation_status(
+    operation_id: str = Path(..., description="视频生成操作 ID"),
+    http_request: Request = None,
+    _dp=Depends(custom_verify_password),
+    _du=Depends(verify_user_agent),
+):
+    """
+    查询视频生成状态
+    
+    返回视频生成任务的当前状态和进度
+    """
+    assert key_manager is not None
+    
+    try:
+        response = await process_video_status(operation_id, key_manager)
+        return response
+    except Exception as e:
+        log("ERROR", f"查询视频状态失败: {e}")
+        sanitized_detail = sanitize_string(f"查询视频状态失败: {e}")
+        raise HTTPException(status_code=500, detail=sanitized_detail)
+
+
+@router.get("/v1/videos/generations/{operation_id}/result", response_model=VideoGenerationResponse)
+@router.get("/videos/generations/{operation_id}/result", response_model=VideoGenerationResponse)
+async def get_video_generation_result(
+    operation_id: str = Path(..., description="视频生成操作 ID"),
+    http_request: Request = None,
+    _dp=Depends(custom_verify_password),
+    _du=Depends(verify_user_agent),
+):
+    """
+    获取视频生成结果
+    
+    当视频生成完成后，获取生成的视频数据
+    """
+    assert key_manager is not None
+    
+    try:
+        response = await process_video_result(operation_id, key_manager)
+        return response
+    except Exception as e:
+        log("ERROR", f"获取视频结果失败: {e}")
+        sanitized_detail = sanitize_string(f"获取视频结果失败: {e}")
+        raise HTTPException(status_code=500, detail=sanitized_detail)

@@ -702,3 +702,206 @@ async def get_video_generation_result(
         log("ERROR", f"获取视频结果失败: {e}")
         sanitized_detail = sanitize_string(f"获取视频结果失败: {e}")
         raise HTTPException(status_code=500, detail=sanitized_detail)
+
+
+# ============== Gemini 原生端点 (兼容前端直接调用) ==============
+
+@router.post("/v1beta/models/{model}:predict")
+async def gemini_native_predict(
+    request: Request,
+    model: str = Path(..., description="模型名称"),
+    _dp=Depends(custom_verify_password),
+    _du=Depends(verify_user_agent),
+):
+    """
+    Gemini 原生 :predict 端点
+    
+    支持 Imagen 图像生成 (前端直接调用格式)
+    请求格式:
+    {
+        "instances": [{"prompt": "..."}],
+        "parameters": {"sampleCount": 1}
+    }
+    """
+    await protect_from_abuse(
+        request,
+        settings.MAX_REQUESTS_PER_MINUTE,
+        settings.MAX_REQUESTS_PER_DAY_PER_IP,
+    )
+    
+    assert key_manager is not None
+    api_key = await key_manager.get_available_key()
+    
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No valid API keys available.",
+        )
+    
+    body = await request.json()
+    
+    # 检查是否是 Imagen 模型
+    if ImagenClient.is_imagen_model(model):
+        # 直接转发到 Gemini Imagen API
+        client = ImagenClient(api_key)
+        url = f"{client.base_url}/models/{model}:predict?key={api_key}"
+        
+        extra_log = {
+            "key": api_key[:8],
+            "request_type": "gemini-native-imagen",
+            "model": model,
+        }
+        log("INFO", "Gemini 原生 Imagen 请求", extra=extra_log)
+        
+        try:
+            import httpx
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json=body,
+                    timeout=120
+                )
+                response.raise_for_status()
+            
+            result = response.json()
+            log("INFO", "Gemini 原生 Imagen 请求成功", extra=extra_log)
+            return result
+            
+        except httpx.HTTPStatusError as e:
+            log("ERROR", f"Gemini Imagen 请求失败: {e.response.text}", extra=extra_log)
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            log("ERROR", f"Gemini Imagen 请求异常: {str(e)}", extra=extra_log)
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    # 其他模型暂不支持
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Model {model} not supported for :predict endpoint"
+    )
+
+
+@router.post("/v1beta/models/{model}:predictLongRunning")
+async def gemini_native_predict_long_running(
+    request: Request,
+    model: str = Path(..., description="模型名称"),
+    _dp=Depends(custom_verify_password),
+    _du=Depends(verify_user_agent),
+):
+    """
+    Gemini 原生 :predictLongRunning 端点
+    
+    支持 Veo 视频生成 (前端直接调用格式)
+    请求格式:
+    {
+        "instances": [{"prompt": "..."}],
+        "parameters": {"aspectRatio": "16:9"}
+    }
+    """
+    await protect_from_abuse(
+        request,
+        settings.MAX_REQUESTS_PER_MINUTE,
+        settings.MAX_REQUESTS_PER_DAY_PER_IP,
+    )
+    
+    assert key_manager is not None
+    api_key = await key_manager.get_available_key()
+    
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No valid API keys available.",
+        )
+    
+    body = await request.json()
+    
+    # 检查是否是 Veo 模型
+    if VeoClient.is_veo_model(model):
+        # 直接转发到 Gemini Veo API
+        client = VeoClient(api_key)
+        url = f"{client.base_url}/models/{model}:predictLongRunning?key={api_key}"
+        
+        extra_log = {
+            "key": api_key[:8],
+            "request_type": "gemini-native-veo",
+            "model": model,
+        }
+        log("INFO", "Gemini 原生 Veo 请求", extra=extra_log)
+        
+        try:
+            import httpx
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json=body,
+                    timeout=60
+                )
+                response.raise_for_status()
+            
+            result = response.json()
+            log("INFO", "Gemini 原生 Veo 请求成功", extra=extra_log)
+            return result
+            
+        except httpx.HTTPStatusError as e:
+            log("ERROR", f"Gemini Veo 请求失败: {e.response.text}", extra=extra_log)
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            log("ERROR", f"Gemini Veo 请求异常: {str(e)}", extra=extra_log)
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    # 其他模型暂不支持
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Model {model} not supported for :predictLongRunning endpoint"
+    )
+
+
+@router.get("/v1beta/{operation_path:path}")
+async def gemini_native_get_operation(
+    request: Request,
+    operation_path: str = Path(..., description="操作路径"),
+    _dp=Depends(custom_verify_password),
+    _du=Depends(verify_user_agent),
+):
+    """
+    Gemini 原生操作状态查询端点
+    
+    用于查询 Veo 视频生成等异步操作的状态
+    路径格式: /v1beta/operations/{operation_id}
+    """
+    assert key_manager is not None
+    api_key = await key_manager.get_available_key()
+    
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No valid API keys available.",
+        )
+    
+    base_url = "https://generativelanguage.googleapis.com/v1beta"
+    url = f"{base_url}/{operation_path}?key={api_key}"
+    
+    extra_log = {
+        "key": api_key[:8],
+        "request_type": "gemini-native-operation",
+        "operation_path": operation_path[:50] if operation_path else "",
+    }
+    log("INFO", "Gemini 原生操作状态查询", extra=extra_log)
+    
+    try:
+        import httpx
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(url, timeout=30)
+            response.raise_for_status()
+        
+        result = response.json()
+        return result
+        
+    except httpx.HTTPStatusError as e:
+        log("ERROR", f"Gemini 操作查询失败: {e.response.text}", extra=extra_log)
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        log("ERROR", f"Gemini 操作查询异常: {str(e)}", extra=extra_log)
+        raise HTTPException(status_code=500, detail=str(e))

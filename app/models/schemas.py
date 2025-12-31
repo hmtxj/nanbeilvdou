@@ -129,3 +129,80 @@ class EmbeddingResponse(BaseModel):
     data: List[EmbeddingData]
     model: str
     usage: Usage
+
+
+# ============== 图像生成模型 (OpenAI 兼容) ==============
+
+class ImageGenerationRequest(BaseModel):
+    """OpenAI 兼容的图像生成请求"""
+    model: str = "imagen-3.0-generate-002"
+    prompt: str
+    n: int = Field(default=1, ge=1, le=4)
+    size: Optional[str] = "1024x1024"
+    quality: Optional[str] = "standard"
+    response_format: Optional[str] = "b64_json"  # "url" or "b64_json"
+    style: Optional[str] = None
+    user: Optional[str] = None
+    # Gemini Imagen 特有参数
+    negative_prompt: Optional[str] = None
+    aspect_ratio: Optional[str] = "1:1"
+    # 图生图参数
+    image: Optional[str] = None  # base64 encoded image for image-to-image
+
+
+class ImageData(BaseModel):
+    """单个图像数据"""
+    b64_json: Optional[str] = None
+    url: Optional[str] = None
+    revised_prompt: Optional[str] = None
+
+
+class ImageGenerationResponse(BaseModel):
+    """图像生成响应 (OpenAI 兼容)"""
+    created: int
+    data: List[ImageData]
+
+
+# ============== 视频生成模型 ==============
+
+class VideoGenerationRequest(BaseModel):
+    """视频生成请求"""
+    model: str = "veo-2.0-generate-001"
+    prompt: str
+    duration: int = Field(default=5, ge=1, le=8)
+    aspect_ratio: Optional[str] = "16:9"
+    # 图生视频参数
+    image: Optional[str] = None  # base64 encoded image
+    user: Optional[str] = None
+
+
+class VideoGenerationOperation(BaseModel):
+    """视频生成操作响应 (异步操作)"""
+    id: str  # operation ID
+    status: str  # "pending", "processing", "completed", "failed"
+    created: int
+
+
+class VideoOperationStatus(BaseModel):
+    """视频操作状态查询响应"""
+    id: str
+    status: str  # "pending", "processing", "completed", "failed"
+    progress: Optional[float] = None
+    created: int
+    completed: Optional[int] = None
+    error: Optional[str] = None
+
+
+class VideoData(BaseModel):
+    """视频数据"""
+    b64_json: Optional[str] = None
+    url: Optional[str] = None
+
+
+class VideoGenerationResponse(BaseModel):
+    """视频生成完成响应"""
+    id: str
+    status: str = "completed"
+    created: int
+    completed: int
+    data: List[VideoData]

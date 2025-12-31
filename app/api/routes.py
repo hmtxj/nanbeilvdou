@@ -706,23 +706,40 @@ async def get_video_generation_result(
 
 # ============== Gemini 原生端点 (兼容前端直接调用) ==============
 
-@router.post("/v1beta/models/{model}:predict")
-async def gemini_native_predict(
+@router.post("/v1beta/models/{model_and_action:path}")
+async def gemini_native_model_action(
     request: Request,
-    model: str = Path(..., description="模型名称"),
+    model_and_action: str = Path(..., description="模型名称和操作，如 imagen-3.0-generate-002:predict"),
     _dp=Depends(custom_verify_password),
     _du=Depends(verify_user_agent),
 ):
     """
-    Gemini 原生 :predict 端点
+    Gemini 原生模型端点
     
-    支持 Imagen 图像生成 (前端直接调用格式)
+    支持:
+    - :predict - Imagen 图像生成
+    - :predictLongRunning - Veo 视频生成
+    
     请求格式:
     {
         "instances": [{"prompt": "..."}],
         "parameters": {"sampleCount": 1}
     }
     """
+    # 解析模型名称和操作类型
+    if ":predict" in model_and_action:
+        if ":predictLongRunning" in model_and_action:
+            model = model_and_action.replace(":predictLongRunning", "")
+            action = "predictLongRunning"
+        else:
+            model = model_and_action.replace(":predict", "")
+            action = "predict"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid action in path: {model_and_action}"
+        )
+    
     await protect_from_abuse(
         request,
         settings.MAX_REQUESTS_PER_MINUTE,
@@ -739,19 +756,18 @@ async def gemini_native_predict(
         )
     
     body = await request.json()
+    base_url = "https://generativelanguage.googleapis.com/v1beta"
     
-    # 检查是否是 Imagen 模型
-    if ImagenClient.is_imagen_model(model):
-        # 直接转发到 Gemini Imagen API
-        client = ImagenClient(api_key)
-        url = f"{client.base_url}/models/{model}:predict?key={api_key}"
+    # 处理 :predict (Imagen 图像生成)
+    if action == "predict":
+        url = f"{base_url}/models/{model}:predict?key={api_key}"
         
         extra_log = {
             "key": api_key[:8],
             "request_type": "gemini-native-imagen",
             "model": model,
         }
-        log("INFO", "Gemini 原生 Imagen 请求", extra=extra_log)
+        log("INFO", f"Gemini 原生 Imagen 请求: {model}", extra=extra_log)
         
         try:
             import httpx
@@ -775,59 +791,16 @@ async def gemini_native_predict(
             log("ERROR", f"Gemini Imagen 请求异常: {str(e)}", extra=extra_log)
             raise HTTPException(status_code=500, detail=str(e))
     
-    # 其他模型暂不支持
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Model {model} not supported for :predict endpoint"
-    )
-
-
-@router.post("/v1beta/models/{model}:predictLongRunning")
-async def gemini_native_predict_long_running(
-    request: Request,
-    model: str = Path(..., description="模型名称"),
-    _dp=Depends(custom_verify_password),
-    _du=Depends(verify_user_agent),
-):
-    """
-    Gemini 原生 :predictLongRunning 端点
-    
-    支持 Veo 视频生成 (前端直接调用格式)
-    请求格式:
-    {
-        "instances": [{"prompt": "..."}],
-        "parameters": {"aspectRatio": "16:9"}
-    }
-    """
-    await protect_from_abuse(
-        request,
-        settings.MAX_REQUESTS_PER_MINUTE,
-        settings.MAX_REQUESTS_PER_DAY_PER_IP,
-    )
-    
-    assert key_manager is not None
-    api_key = await key_manager.get_available_key()
-    
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No valid API keys available.",
-        )
-    
-    body = await request.json()
-    
-    # 检查是否是 Veo 模型
-    if VeoClient.is_veo_model(model):
-        # 直接转发到 Gemini Veo API
-        client = VeoClient(api_key)
-        url = f"{client.base_url}/models/{model}:predictLongRunning?key={api_key}"
+    # 处理 :predictLongRunning (Veo 视频生成)
+    elif action == "predictLongRunning":
+        url = f"{base_url}/models/{model}:predictLongRunning?key={api_key}"
         
         extra_log = {
             "key": api_key[:8],
             "request_type": "gemini-native-veo",
             "model": model,
         }
-        log("INFO", "Gemini 原生 Veo 请求", extra=extra_log)
+        log("INFO", f"Gemini 原生 Veo 请求: {model}", extra=extra_log)
         
         try:
             import httpx
@@ -850,12 +823,6 @@ async def gemini_native_predict_long_running(
         except Exception as e:
             log("ERROR", f"Gemini Veo 请求异常: {str(e)}", extra=extra_log)
             raise HTTPException(status_code=500, detail=str(e))
-    
-    # 其他模型暂不支持
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Model {model} not supported for :predictLongRunning endpoint"
-    )
 
 
 @router.get("/v1beta/{operation_path:path}")
